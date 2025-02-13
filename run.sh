@@ -1,8 +1,8 @@
 #!/bin/bash
 
-if [ "$WP_CUSTOM_INI" ]; then
+if [ "$WORDPRESS_CUSTOM_INI" ]; then
     echo "Writing custom ini values"
-    printf "$WP_CUSTOM_INI" > $PHP_INI_DIR/conf.d/custom.ini
+    printf "$WORDPRESS_CUSTOM_INI" > $PHP_INI_DIR/conf.d/custom.ini
 fi
 
 set +e
