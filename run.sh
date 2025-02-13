@@ -5,5 +5,7 @@ if [ "$WP_CUSTOM_INI" ]; then
     printf "$WP_CUSTOM_INI" > $PHP_INI_DIR/conf.d/custom.ini
 fi
 
-service nginx start 
+set +e
+service nginx start
 docker-entrypoint.sh php-fpm
+service nginx stop
