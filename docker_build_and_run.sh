@@ -1,5 +1,5 @@
 
-docker buildx build . --platform linux/amd64 --progress=auto -t eu.gcr.io/appstrax/wordpress:git
+docker buildx build . --platform linux/amd64 --progress=auto -t europe-west4-docker.pkg.dev/appstrax/main/wordpress:git
 
 docker run \
 --add-host host.docker.internal:host-gateway \
@@ -12,4 +12,4 @@ docker run \
 --name wordpress_git \
 -v wordpress_uploads:/var/www/html/wp-content/uploads \
 -e WP_CUSTOM_INI='upload_max_filesize = 64M\npost_max_size = 64M\nmax_execution_time = 300' \
--d eu.gcr.io/appstrax/wordpress:git
+-d europe-west4-docker.pkg.dev/appstrax/main/wordpress:git
