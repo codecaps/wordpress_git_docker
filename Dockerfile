@@ -11,5 +11,4 @@ COPY run.sh /usr/run.sh
 
 EXPOSE 80
 
-CMD /usr/run.sh
-
+ENTRYPOINT ["/usr/run.sh"]
