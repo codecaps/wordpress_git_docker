@@ -10,8 +10,6 @@ NGINX_DEBUG_HEADERS_FILE="/etc/nginx/conf.d/generated_debug_headers.conf"
 NGINX_WP_CRON_FILE="/etc/nginx/conf.d/generated_wp_cron.conf"
 NGINX_EXTRA_FILE="/etc/nginx/conf.d/generated_extra.conf"
 
-DEFAULT_CACHE_ENABLED="true"
-DEFAULT_CACHE_STRATEGY="standard"
 DEFAULT_RATE_LIMIT_NORMAL_ROUTES_RPM="120"
 DEFAULT_RATE_LIMIT_PROTECTED_ROUTES_RPM="30"
 DEFAULT_RATE_LIMIT_API_ROUTES_RPM="60"
@@ -63,8 +61,6 @@ validated_upload_size() {
 
 # --- Parse env vars ---
 
-cache_enabled_raw="${CACHE_ENABLED:-$DEFAULT_CACHE_ENABLED}"
-cache_strategy="${CACHE_STRATEGY:-$DEFAULT_CACHE_STRATEGY}"
 xmlrpc_enabled_raw="${XMLRPC_ENABLED:-$DEFAULT_XMLRPC_ENABLED}"
 disable_public_wp_cron_raw="${DISABLE_PUBLIC_WP_CRON:-$DEFAULT_DISABLE_PUBLIC_WP_CRON}"
 debug_headers_raw="${DEBUG_HEADERS:-$DEFAULT_DEBUG_HEADERS}"
@@ -77,31 +73,19 @@ api_routes_rpm="$(validated_positive_int "${RATE_LIMIT_API_ROUTES_RPM:-$DEFAULT_
 max_conn_per_ip="$(validated_positive_int "${RATE_LIMIT_MAX_CONN_PER_IP:-$DEFAULT_RATE_LIMIT_MAX_CONN_PER_IP}" "$DEFAULT_RATE_LIMIT_MAX_CONN_PER_IP" "RATE_LIMIT_MAX_CONN_PER_IP")"
 max_upload_size="$(validated_upload_size "${MAX_UPLOAD_SIZE:-$DEFAULT_MAX_UPLOAD_SIZE}" "$DEFAULT_MAX_UPLOAD_SIZE" "MAX_UPLOAD_SIZE")"
 
-# --- Cache strategy and TTL ---
+# --- Cache and TTL ---
 
-# CACHE_STRATEGY sets a baseline TTL. CACHE_TTL_SECONDS always wins if explicitly set.
-# CACHE_TTL_MINUTES is a deprecated alias.
-
-if is_true "$cache_enabled_raw"; then
-    cache_enabled="true"
-else
-    cache_enabled="false"
-fi
-
-case "$cache_strategy" in
-    aggressive) strategy_ttl=600 ;;
-    off)        cache_enabled="false" ; strategy_ttl=60 ;;
-    *)          strategy_ttl=60 ;;  # standard (default)
-esac
+cache_enabled="false"
+cache_ttl_seconds=""
 
 if [ -n "${CACHE_TTL_SECONDS:-}" ]; then
-    cache_ttl_seconds="$(validated_positive_int "$CACHE_TTL_SECONDS" "$strategy_ttl" "CACHE_TTL_SECONDS")"
-elif [ -n "${CACHE_TTL_MINUTES:-}" ]; then
-    log "CACHE_TTL_MINUTES is deprecated — use CACHE_TTL_SECONDS instead."
-    _mins="$(validated_positive_int "$CACHE_TTL_MINUTES" "1" "CACHE_TTL_MINUTES")"
-    cache_ttl_seconds=$(( _mins * 60 ))
-else
-    cache_ttl_seconds="$strategy_ttl"
+    if [[ "$CACHE_TTL_SECONDS" =~ ^[0-9]+$ ]] && [ "$CACHE_TTL_SECONDS" -ge 1 ]; then
+        cache_enabled="true"
+        cache_ttl_seconds="$CACHE_TTL_SECONDS"
+    else
+        log "Invalid CACHE_TTL_SECONDS value '${CACHE_TTL_SECONDS}'. Must be a positive integer."
+        exit 1
+    fi
 fi
 
 # nginx lowercase size suffix (e.g. 64M -> 64m)
@@ -239,7 +223,7 @@ EOF
 fi
 
 log "Generated overrides:"
-log "  cache_enabled=${cache_enabled}, cache_strategy=${cache_strategy}, cache_ttl_seconds=${cache_ttl_seconds}"
+log "  cache_enabled=${cache_enabled}, cache_ttl_seconds=${cache_ttl_seconds:-unset}"
 log "  xmlrpc_enabled=${xmlrpc_enabled_raw}, disable_public_wp_cron=${disable_public_wp_cron_raw}"
 log "  max_upload_size=${max_upload_size}, max_conn_per_ip=${max_conn_per_ip}"
 log "  normal_routes_rpm=${normal_routes_rpm}, protected_routes_rpm=${protected_routes_rpm}, api_routes_rpm=${api_routes_rpm}"
