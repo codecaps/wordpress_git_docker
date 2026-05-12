@@ -5,7 +5,7 @@ NGINX_HTTP_OVERRIDES_FILE="/etc/nginx/conf.d/generated_http_overrides.conf"
 NGINX_CACHE_OVERRIDES_FILE="/etc/nginx/conf.d/generated_fastcgi_cache.conf"
 NGINX_XMLRPC_OVERRIDES_FILE="/etc/nginx/conf.d/generated_xmlrpc_route.conf"
 
-DEFAULT_CACHE_ENABLED="true"
+DEFAULT_CACHE_ENABLED="false"
 DEFAULT_CACHE_TTL_MINUTES="10"
 DEFAULT_RATE_LIMIT_NORMAL_ROUTES_RPM="120"
 DEFAULT_RATE_LIMIT_PROTECTED_ROUTES_RPM="30"
