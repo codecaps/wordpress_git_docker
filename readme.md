@@ -1,48 +1,65 @@
 # WordPress Deployments
 
-This repository is used for Git based Code Capsules WordPress deployments.
+This repository is the base Docker image for Git-based Code Capsules WordPress deployments.
 
-The Dockerfile starts from `wordpress:6.8.1-php8.3-fpm` (FPM is PHP's FastCGI implementation).
+The Dockerfile starts from `wordpress:6.9-php8.4-fpm`. Nginx acts as a reverse proxy in front of PHP-FPM, both running in the same container.
 
-We use nginx as a reverse proxy. `default.conf` and `nginx.conf` are the nginx configuration files.
+---
 
 ## Container Startup
 
-`run.sh` is executed on container start. It will:
-- Write custom PHP ini values from `$WORDPRESS_CUSTOM_INI` to `$PHP_INI_DIR/conf.d/zz-custom.ini`
-- Write custom PHP-FPM pool config from `$WORDPRESS_FPM_CONF` to `/usr/local/etc/php-fpm.d/zz-custom.conf`
-- Generate nginx cache and rate-limit overrides from environment variables
-- Validate nginx configuration with `nginx -t`
-- Start the nginx service
-- Run the WordPress PHP-FPM entrypoint
-- Stop nginx when the PHP-FPM process exits
+`run.sh` is executed on container start. It:
+
+1. Writes custom PHP ini values from `$WORDPRESS_CUSTOM_INI` to `$PHP_INI_DIR/conf.d/zz-custom.ini`
+2. Writes custom PHP-FPM pool config from `$WORDPRESS_FPM_CONF` to `/usr/local/etc/php-fpm.d/zz-custom.conf`
+3. Generates nginx config fragments from environment variables (rate limits, cache, security headers, etc.)
+4. Validates nginx configuration with `nginx -t`
+5. Starts nginx, nginx-prometheus-exporter, php-fpm_exporter, and php-fpm as supervised background processes
+6. Shuts everything down cleanly on SIGTERM
+
+Prometheus metrics are exposed on ports **9113** (nginx) and **9253** (PHP-FPM).
+
+---
 
 ## Git Deployment
-
-This is used for Git-based WordPress deployments.
 
 The `wp-html` folder is populated with the contents of the Git installation (done in the Code Capsules deployment pipeline), then copied into `/var/www/html`.
 
 `/var/www/html/wp-content/uploads` has a volume mount to persist uploads between deployments.
+
+---
 
 ## Environment Variables
 
 ### Required WordPress Variables
 
 | Variable | Description |
-|----------|-------------|
+|---|---|
 | `WORDPRESS_DB_HOST` | Database host (e.g., `host:3306`) |
 | `WORDPRESS_DB_USER` | Database username |
 | `WORDPRESS_DB_PASSWORD` | Database password |
 | `WORDPRESS_DB_NAME` | Database name |
 
-### Performance Tuning Variables
+### WordPress Configuration
+
+#### `WORDPRESS_CONFIG_EXTRA`
+
+Arbitrary PHP injected directly into `wp-config.php` by the upstream WordPress Docker entrypoint. Use this for WordPress constants that belong in `wp-config.php`:
+
+```
+WORDPRESS_CONFIG_EXTRA=define('DISABLE_WP_CRON', true);
+define('FORCE_SSL_ADMIN', true);
+define('WP_MEMORY_LIMIT', '256M');
+define('WP_MAX_MEMORY_LIMIT', '512M');
+```
+
+> **Recommended:** Set `define('DISABLE_WP_CRON', true);` and use a Kubernetes CronJob to trigger cron every 5 minutes instead of relying on HTTP traffic.
 
 #### `WORDPRESS_CUSTOM_INI`
 
-Custom PHP ini settings. Recommended for 2GB RAM / 1 CPU:
+Custom PHP ini settings merged with the defaults. Recommended for 2GB RAM / 1 CPU:
 
-```
+```ini
 memory_limit = 128M
 opcache.enable = 1
 opcache.memory_consumption = 128
@@ -56,22 +73,19 @@ opcache.jit = tracing
 opcache.jit_buffer_size = 64M
 realpath_cache_ttl = 600
 output_buffering = 4096
-upload_max_filesize = 32M
-post_max_size = 40M
 max_file_uploads = 10
 max_execution_time = 60
 max_input_time = 60
 default_socket_timeout = 30
-display_errors = Off
-log_errors = On
-error_reporting = E_ALL & ~E_DEPRECATED & ~E_STRICT
 ```
+
+> **Note:** `upload_max_filesize` and `post_max_size` default to `MAX_UPLOAD_SIZE`. Override here only if you need them to differ from the nginx limit.
 
 #### `WORDPRESS_FPM_CONF`
 
-Custom PHP-FPM pool configuration. Recommended for 2GB RAM / 1 CPU:
+Custom PHP-FPM pool configuration merged with the defaults. Recommended for 2GB RAM / 1 CPU:
 
-```
+```ini
 [www]
 pm = static
 pm.max_children = 8
@@ -82,58 +96,171 @@ request_terminate_timeout = 60s
 **Scaling guide:**
 
 | RAM | CPU | `pm.max_children` |
-|-----|-----|-------------------|
+|---|---|---|
 | 512MB | 0.5 | 3 |
 | 1GB | 1 | 5 |
 | 2GB | 1 | 8 |
 | 4GB | 2 | 16 |
 
-### Nginx Runtime Variables
+> **Security note:** `clear_env = no` is set so WordPress can read `WORDPRESS_DB_HOST` etc. via `getenv()`. This also means **all** environment variables in the container are visible to PHP code. Do not inject secrets as env vars that WordPress plugins should not access.
 
-#### `CACHE_ENABLED`
+---
 
-- Controls whether FastCGI page caching is active.
-- Default: `true`
-- Truthy values: `true`, `1`, `yes`, `on`
-- Any other value disables caching (bypass-only mode).
+### Upload Size
 
-#### `CACHE_TTL_MINUTES`
+#### `MAX_UPLOAD_SIZE`
 
-- Cache TTL (in minutes) for `200/301/302` responses.
-- Default: `10`
-- Must be a positive integer. Invalid values fall back to default.
+Controls `client_max_body_size` in nginx **and** `upload_max_filesize` / `post_max_size` in PHP, keeping them in sync.
 
-#### `RATE_LIMIT_NORMAL_ROUTES_RPM`
+- Default: `64M`
+- Accepts: `64M`, `128M`, `256M`, etc.
 
-- Requests-per-minute limit for `normal_routes`.
-- Default: `120`
-- Must be a positive integer.
+This is the single knob for upload size. Do not set `upload_max_filesize` in `WORDPRESS_CUSTOM_INI` to a value larger than this, or nginx will silently reject uploads with 413.
 
-#### `RATE_LIMIT_PROTECTED_ROUTES_RPM`
+---
 
-- Requests-per-minute limit for `protected_routes`.
-- Default: `30`
-- Must be a positive integer.
+### Caching
 
-#### `RATE_LIMIT_API_ROUTES_RPM`
+#### `CACHE_TTL_SECONDS`
 
-- Requests-per-minute limit for `api_routes`.
-- Default: `60`
-- Must be a positive integer.
+Enables FastCGI page caching and sets TTL in seconds. Must be a positive integer.
 
-### Startup Script Layout
+- Default: unset (caching disabled)
+- Example: `CACHE_TTL_SECONDS=60` enables caching with 60s TTL
+- Example: `CACHE_TTL_SECONDS=600` enables caching with 10-minute TTL
 
-- `run.sh` orchestrates container startup.
-- `scripts/configure_wordpress_custom_ini.sh` handles `WORDPRESS_CUSTOM_INI`.
-- `scripts/configure_wordpress_fpm_conf.sh` handles `WORDPRESS_FPM_CONF`.
-- `scripts/configure_nginx_overrides.sh` generates env-driven nginx override files.
-- `scripts/lib/merge_and_write_config.sh` contains shared merge logic.
+If this variable is not set, nginx runs with caching disabled (`fastcgi_cache_bypass 1` / `fastcgi_no_cache 1`).
 
-## Optimizations Included
+> **Which strategy should I use?**
+>
+> - Start with `CACHE_TTL_SECONDS=60` for most content sites.
+> - Use a higher value such as `CACHE_TTL_SECONDS=600` for mostly-static sites.
+> - Leave `CACHE_TTL_SECONDS` unset for WooCommerce, membership/LMS, real-time dashboards, or when a WordPress cache plugin manages page caching.
 
-- **OPcache with JIT**: Reduces CPU usage by 30-50%
-- **Gzip compression**: Reduces response sizes by 60-80%
-- **Static file caching**: 30-day browser cache for assets
-- **Security headers**: X-Frame-Options, X-Content-Type-Options
-- **PHP execution in uploads blocked**: Prevents malicious uploads
-- **Sensitive files blocked**: wp-config.php, .git, .htaccess
+---
+
+### Rate Limiting
+
+| Variable | Default | Description |
+|---|---|---|
+| `RATE_LIMIT_NORMAL_ROUTES_RPM` | `120` | Req/min per IP for public routes |
+| `RATE_LIMIT_PROTECTED_ROUTES_RPM` | `30` | Req/min per IP for wp-admin, wp-login |
+| `RATE_LIMIT_API_ROUTES_RPM` | `60` | Req/min per IP for /wp-json/ |
+| `RATE_LIMIT_MAX_CONN_PER_IP` | `30` | Max concurrent connections per IP |
+
+---
+
+### Security & Behaviour
+
+| Variable | Default | Description |
+|---|---|---|
+| `XMLRPC_ENABLED` | `false` | Set to `true` to enable XML-RPC (Jetpack, WP mobile app, external publishing) |
+| `DISABLE_PUBLIC_WP_CRON` | `true` | Restrict `wp-cron.php` to `127.0.0.1`. Use a K8s CronJob to call it internally. |
+| `SESSION_COOKIE_SECURE` | `1` | PHP `session.cookie_secure`. Set to `0` for local HTTP development. |
+| `CSP_HEADER` | permissive default | Full `Content-Security-Policy` header value. Set to empty string to disable. |
+| `DEBUG_HEADERS` | `false` | Set to `true` to expose `X-Cache` response header (reveals cache HIT/MISS/BYPASS). |
+
+Default CSP:
+```
+default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob: https:; frame-ancestors 'self';
+```
+
+---
+
+### Nginx Customisation
+
+#### `NGINX_EXTRA_CONF`
+
+Raw nginx config injected into the `server {}` block before the PHP handler. Useful for custom proxy rules, headless WordPress API routes, WooCommerce custom endpoints.
+
+```
+NGINX_EXTRA_CONF=location /custom-api/ { proxy_pass http://internal-service:8080/; }
+```
+
+---
+
+### Prometheus Metrics (Build-time)
+
+| Variable | Default | Description |
+|---|---|---|
+| `NGINX_EXPORTER_VERSION` | `1.4.0` | Build-time: nginx-prometheus-exporter version |
+| `FPM_EXPORTER_VERSION` | `2.2.0` | Build-time: php-fpm_exporter version |
+| `TARGETARCH` | `amd64` | Build-time: target CPU architecture (`amd64`, `arm64`) |
+
+---
+
+## Prometheus Metrics
+
+The container exposes two Prometheus metrics ports. No sidecar required.
+
+| Port | Exporter | Key metrics |
+|---|---|---|
+| `9113` | nginx-prometheus-exporter | `nginx_connections_active`, `nginx_http_requests_total`, `nginx_connections_waiting` |
+| `9253` | php-fpm_exporter | `phpfpm_listen_queue`, `phpfpm_max_children_reached_total`, `phpfpm_active_processes`, `phpfpm_slow_requests_total` |
+
+WordPress application metrics (post counts, user counts, autoloaded options) are available at `http://127.0.0.1:8080/wp-metrics` from inside the container only.
+
+**Recommended Prometheus alerts:**
+
+```yaml
+- alert: FPMWorkersExhausted
+  expr: phpfpm_listen_queue > 0
+  for: 1m
+
+- alert: FPMMaxChildrenHit
+  expr: increase(phpfpm_max_children_reached_total[5m]) > 0
+
+- alert: FPMNoIdleWorkers
+  expr: phpfpm_idle_processes == 0
+  for: 2m
+
+- alert: WordPressAutoloadBloat
+  expr: wordpress_autoloaded_options_bytes > 5e6
+```
+
+---
+
+## Redis Object Cache
+
+`php-redis` is not pre-installed in this image. To use Redis for object caching:
+
+1. Add a custom image layer that installs the extension:
+   ```dockerfile
+   FROM this-image
+   RUN pecl install redis && docker-php-ext-enable redis
+   ```
+2. Install and activate the [Redis Cache](https://wordpress.org/plugins/redis-cache/) plugin.
+3. Set constants via `WORDPRESS_CONFIG_EXTRA`:
+   ```
+   WORDPRESS_CONFIG_EXTRA=define('WP_REDIS_HOST', getenv('REDIS_HOST'));
+   define('WP_REDIS_PORT', 6379);
+   define('WP_REDIS_PREFIX', 'mysite_');
+   ```
+
+> **Multi-tenancy:** Always set `WP_REDIS_PREFIX` to a unique value per site when multiple sites share a Redis instance. Without it, two WordPress sites will corrupt each other's object cache.
+
+---
+
+## Startup Script Layout
+
+| Script | Purpose |
+|---|---|
+| `run.sh` | Orchestrates startup; supervises nginx, exporters, and php-fpm |
+| `scripts/configure_wordpress_custom_ini.sh` | Merges `WORDPRESS_CUSTOM_INI` with defaults |
+| `scripts/configure_wordpress_fpm_conf.sh` | Merges `WORDPRESS_FPM_CONF` with defaults |
+| `scripts/configure_nginx_overrides.sh` | Generates all dynamic nginx config fragments |
+| `scripts/lib/merge_and_write_config.sh` | Shared awk-based merge logic |
+
+---
+
+## Optimisations Included
+
+- **OPcache**: reduces CPU usage on repeated requests
+- **Gzip compression**: reduces response sizes by 60–80%
+- **Static file caching**: 30-day browser cache for assets; 1h for XML/txt
+- **FastCGI page cache**: configurable TTL (default 60s), bypassed for logged-in users, carts, admin
+- **Security headers**: HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, X-Permitted-Cross-Domain-Policies
+- **PHP execution blocked** in uploads, cache, and upgrade directories
+- **Sensitive files blocked**: `wp-config.php`, `debug.log`, `.env`, `.git`, `wp-config-sample.php`, plugin/theme readme files, `wp-includes/*.php`
+- **Rate limiting**: three configurable zones (normal, protected, API) plus per-IP connection limit
+- **Prometheus metrics**: in-container nginx and PHP-FPM exporters, no sidecar required
