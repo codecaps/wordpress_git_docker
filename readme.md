@@ -11,8 +11,11 @@ We use nginx as a reverse proxy. `default.conf` and `nginx.conf` are the nginx c
 `run.sh` is executed on container start. It will:
 - Write custom PHP ini values from `$WORDPRESS_CUSTOM_INI` to `$PHP_INI_DIR/conf.d/zz-custom.ini`
 - Write custom PHP-FPM pool config from `$WORDPRESS_FPM_CONF` to `/usr/local/etc/php-fpm.d/zz-custom.conf`
+- Generate nginx cache and rate-limit overrides from environment variables
+- Validate nginx configuration with `nginx -t`
 - Start the nginx service
 - Run the WordPress PHP-FPM entrypoint
+- Stop nginx when the PHP-FPM process exits
 
 ## Git Deployment
 
@@ -84,6 +87,47 @@ request_terminate_timeout = 60s
 | 1GB | 1 | 5 |
 | 2GB | 1 | 8 |
 | 4GB | 2 | 16 |
+
+### Nginx Runtime Variables
+
+#### `CACHE_ENABLED`
+
+- Controls whether FastCGI page caching is active.
+- Default: `true`
+- Truthy values: `true`, `1`, `yes`, `on`
+- Any other value disables caching (bypass-only mode).
+
+#### `CACHE_TTL_MINUTES`
+
+- Cache TTL (in minutes) for `200/301/302` responses.
+- Default: `10`
+- Must be a positive integer. Invalid values fall back to default.
+
+#### `RATE_LIMIT_NORMAL_ROUTES_RPM`
+
+- Requests-per-minute limit for `normal_routes`.
+- Default: `120`
+- Must be a positive integer.
+
+#### `RATE_LIMIT_PROTECTED_ROUTES_RPM`
+
+- Requests-per-minute limit for `protected_routes`.
+- Default: `30`
+- Must be a positive integer.
+
+#### `RATE_LIMIT_API_ROUTES_RPM`
+
+- Requests-per-minute limit for `api_routes`.
+- Default: `60`
+- Must be a positive integer.
+
+### Startup Script Layout
+
+- `run.sh` orchestrates container startup.
+- `scripts/configure_wordpress_custom_ini.sh` handles `WORDPRESS_CUSTOM_INI`.
+- `scripts/configure_wordpress_fpm_conf.sh` handles `WORDPRESS_FPM_CONF`.
+- `scripts/configure_nginx_overrides.sh` generates env-driven nginx override files.
+- `scripts/lib/merge_and_write_config.sh` contains shared merge logic.
 
 ## Optimizations Included
 

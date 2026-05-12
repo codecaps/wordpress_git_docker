@@ -1,16 +1,13 @@
 #!/bin/bash
+set -euo pipefail
 
-# Write custom PHP ini values
-if [ "$WORDPRESS_CUSTOM_INI" ]; then
-    echo "Writing custom ini values"
-    printf "$WORDPRESS_CUSTOM_INI" > $PHP_INI_DIR/conf.d/zz-custom.ini
-fi
+RUN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Write custom PHP-FPM pool config
-if [ "$WORDPRESS_FPM_CONF" ]; then
-    echo "Writing custom FPM pool config"
-    printf "$WORDPRESS_FPM_CONF" > /usr/local/etc/php-fpm.d/zz-custom.conf
-fi
+"$RUN_DIR/scripts/configure_wordpress_custom_ini.sh"
+"$RUN_DIR/scripts/configure_wordpress_fpm_conf.sh"
+"$RUN_DIR/scripts/configure_nginx_overrides.sh"
+
+nginx -t
 
 set +e
 service nginx start
