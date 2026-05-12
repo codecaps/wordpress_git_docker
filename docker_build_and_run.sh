@@ -10,8 +10,11 @@ docker run \
 -e WORDPRESS_DB_NAME='wordpress' \
 -e WORDPRESS_DEBUG=true \
 -p 8000:80 \
+-p 9113:9113 \
+-p 9253:9253 \
 --name wordpress_git \
 -v wordpress_uploads:/var/www/html/wp-content/uploads \
+-e CACHE_TTL_SECONDS=60 \
 -d europe-west4-docker.pkg.dev/appstrax/main/wordpress:git
 # -e CACHE_ENABLED=false \
 

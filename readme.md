@@ -121,40 +121,21 @@ This is the single knob for upload size. Do not set `upload_max_filesize` in `WO
 
 ### Caching
 
-#### `CACHE_STRATEGY`
-
-Preset for FastCGI cache behaviour.
-
-| Value | TTL | Use case |
-|---|---|---|
-| `standard` (default) | 60s | Blogs, portfolios, sites with comments. Comments appear within 60 seconds. |
-| `aggressive` | 600s | High-traffic mostly-static sites. Acceptable if content changes infrequently. |
-| `off` | disabled | WooCommerce, BuddyPress, membership/LMS sites, real-time content. |
-
-`CACHE_STRATEGY=off` is equivalent to `CACHE_ENABLED=false`.
-
-#### `CACHE_ENABLED`
-
-Overrides `CACHE_STRATEGY`. Set to `false` to disable caching entirely regardless of strategy.
-
-- Default: `true`
-- Truthy values: `true`, `1`, `yes`, `on`
-
 #### `CACHE_TTL_SECONDS`
 
-Overrides the TTL set by `CACHE_STRATEGY`. Must be a positive integer.
+Enables FastCGI page caching and sets TTL in seconds. Must be a positive integer.
 
-- Default: derived from `CACHE_STRATEGY` (60 for `standard`, 600 for `aggressive`)
+- Default: unset (caching disabled)
+- Example: `CACHE_TTL_SECONDS=60` enables caching with 60s TTL
+- Example: `CACHE_TTL_SECONDS=600` enables caching with 10-minute TTL
 
-#### `CACHE_TTL_MINUTES` *(deprecated)*
-
-Alias for `CACHE_TTL_SECONDS` × 60. Logs a deprecation warning at startup. Use `CACHE_TTL_SECONDS` instead.
+If this variable is not set, nginx runs with caching disabled (`fastcgi_cache_bypass 1` / `fastcgi_no_cache 1`).
 
 > **Which strategy should I use?**
 >
-> - `standard`: for most sites. Comments and content updates appear within 60 seconds.
-> - `aggressive`: for news archives, documentation, landing pages where content rarely changes.
-> - `off`: for WooCommerce stores, real-time dashboards, or when using a WordPress caching plugin (WP Rocket, W3 Total Cache) that manages its own static HTML cache. Set `CACHE_ENABLED=false` and let the plugin handle caching.
+> - Start with `CACHE_TTL_SECONDS=60` for most content sites.
+> - Use a higher value such as `CACHE_TTL_SECONDS=600` for mostly-static sites.
+> - Leave `CACHE_TTL_SECONDS` unset for WooCommerce, membership/LMS, real-time dashboards, or when a WordPress cache plugin manages page caching.
 
 ---
 

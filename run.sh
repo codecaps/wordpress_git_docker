@@ -28,7 +28,7 @@ nginx-prometheus-exporter \
     --web.listen-address=":9113" &
 NGINX_EXP_PID=$!
 
-php-fpm_exporter \
+php-fpm_exporter server \
     --phpfpm.scrape-uri="tcp://127.0.0.1:9000/fpm-status" \
     --web.listen-address=":9253" &
 FPM_EXP_PID=$!

@@ -41,9 +41,4 @@ EXPOSE 80
 EXPOSE 9113
 EXPOSE 9253
 
-# Health check hits the internal metrics server which proxies /fpm-ping to PHP-FPM,
-# verifying that both nginx and php-fpm are alive.
-HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
-    CMD curl -sf http://127.0.0.1:8080/fpm-ping || exit 1
-
 ENTRYPOINT ["/usr/run.sh"]
