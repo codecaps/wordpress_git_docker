@@ -137,6 +137,25 @@ If this variable is not set, nginx runs with caching disabled (`fastcgi_cache_by
 > - Use a higher value such as `CACHE_TTL_SECONDS=600` for mostly-static sites.
 > - Leave `CACHE_TTL_SECONDS` unset for WooCommerce, membership/LMS, real-time dashboards, or when a WordPress cache plugin manages page caching.
 
+#### `CACHE_IGNORE_QUERY_PARAMS`
+
+Normalizes the FastCGI cache key by ignoring matching query parameter **names** (WordPress still receives the full query string). Requires `CACHE_TTL_SECONDS` to be set. If unset or `[]`, the cache key uses the full `$request_uri` (default).
+
+- Format: JSON array of strings, e.g. `'["utm_*","fbclid"]'`
+- Wildcards: `*` in a pattern matches any characters in the parameter name (e.g. `utm_*` matches `utm_term`, `utm_source`)
+- Allowed characters per pattern: `A–Z`, `a–z`, `0–9`, `_`, `*`, `-`
+
+Example with `CACHE_IGNORE_QUERY_PARAMS='["utm_*"]'`:
+
+| Request | Cache behavior |
+|---|---|
+| `GET /page/1?utm_term=xyz` | MISS — rendered and stored |
+| `GET /page/1?utm_term=abc` | HIT — same cache entry as above |
+| `GET /page/1` | HIT — same cache entry |
+| `GET /page/1?page=2&utm_term=xyz` | Key includes `page=2` only (utm params stripped from key) |
+
+Non-ignored query parameters still differentiate cache entries. Parameter order in the URL is not normalized.
+
 ---
 
 ### Rate Limiting
