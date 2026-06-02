@@ -15,6 +15,7 @@ docker run \
 --name wordpress_git \
 -v wordpress_uploads:/var/www/html/wp-content/uploads \
 -e CACHE_TTL_SECONDS=60 \
+-e CACHE_IGNORE_QUERY_PARAMS='["utm_*","fbclid"]' \
 -d europe-west4-docker.pkg.dev/appstrax/main/wordpress:git
 # -e CACHE_ENABLED=false \
 
