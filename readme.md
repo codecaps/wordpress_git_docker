@@ -167,6 +167,41 @@ Non-ignored query parameters still differentiate cache entries. Parameter order 
 | `RATE_LIMIT_API_ROUTES_RPM` | `60` | Req/min per IP for /wp-json/ |
 | `RATE_LIMIT_MAX_CONN_PER_IP` | `30` | Max concurrent connections per IP |
 
+All limits are **per client IP**. The client IP is resolved from `X-Forwarded-For`
+(`real_ip_recursive on`), trusting private intermediary ranges plus Cloudflare's
+edge ranges — see [Real Client IP & Cloudflare](#real-client-ip--cloudflare). If
+the true client IP is not resolved correctly, every visitor shares one bucket and
+trips these limits with spurious `429`s.
+
+---
+
+### Real Client IP & Cloudflare
+
+nginx resolves the real client IP from `X-Forwarded-For` and uses it as the key for
+all rate limits, the per-IP connection limit, access logs, and the IP passed to
+WordPress (`REMOTE_ADDR` / `X-Real-IP`). `set_real_ip_from` in `nginx.conf` trusts:
+
+- Private intermediary ranges (`10/8`, `172.16/12`, `192.168/16`) — Traefik / k8s LB / VPC.
+- **Cloudflare's published edge ranges**, baked into the image at build time.
+
+Cloudflare support is **automatic** — no env var. When the container is proxied by
+Cloudflare, the edge IPs (which are public) appear in `X-Forwarded-For`. Trusting
+them lets recursion walk past the edge to the real visitor. Without this, recursion
+would stop at a Cloudflare IP and **collapse every visitor onto a handful of edge
+IPs**, tripping the per-IP rate and connection limits. When Cloudflare is not in
+front, trusting these ranges is harmless.
+
+The ranges are fetched from `cloudflare.com/ips-v4` and `ips-v6` during `docker build`.
+**Rebuild the image to refresh them.** If the fetch fails at build time, a
+version-controlled snapshot (`cloudflare_ips.fallback.conf`) is used and a warning
+is logged.
+
+> ⚠️ **Security:** Trusting Cloudflare's *public* ranges means a client that can
+> reach the origin **directly** (bypassing Cloudflare) could forge `X-Forwarded-For`
+> to spoof or rotate client IPs — evading rate limits or framing another IP. Lock the
+> origin to Cloudflare only: edge IP allowlist at your load balancer, Authenticated
+> Origin Pulls, or a Cloudflare Tunnel.
+
 ---
 
 ### Security & Behaviour
@@ -281,5 +316,6 @@ WordPress application metrics (post counts, user counts, autoloaded options) are
 - **Security headers**: HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, X-Permitted-Cross-Domain-Policies
 - **PHP execution blocked** in uploads, cache, and upgrade directories
 - **Sensitive files blocked**: `wp-config.php`, `debug.log`, `.env`, `.git`, `wp-config-sample.php`, plugin/theme readme files, `wp-includes/*.php`
-- **Rate limiting**: three configurable zones (normal, protected, API) plus per-IP connection limit
+- **Rate limiting**: three configurable zones (normal, protected, API) plus per-IP connection limit, keyed on the real client IP behind Traefik/Cloudflare
+- **Cloudflare-aware real IP**: edge ranges baked at build so XFF recursion resolves the true visitor IP, preventing spurious 429s
 - **Prometheus metrics**: in-container nginx and PHP-FPM exporters, no sidecar required
