@@ -23,11 +23,11 @@ listen.backlog = 2048
 ; Example:
 ;   768MB available / 64MB per worker ≈ 12 workers
 pm = dynamic
-pm.max_children = 12
-pm.start_servers = 3
-pm.min_spare_servers = 3
-pm.max_spare_servers = 6
-pm.max_requests = 500
+pm.max_children = 120
+pm.start_servers = 30
+pm.min_spare_servers = 30
+pm.max_spare_servers = 60
+pm.max_requests = 5000
 
 ; Kill very slow PHP requests instead of letting workers hang forever.
 request_terminate_timeout = 120s
