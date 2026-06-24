@@ -276,20 +276,36 @@ WordPress application metrics (post counts, user counts, autoloaded options) are
 
 ## Redis Object Cache
 
-`php-redis` is not pre-installed in this image. To use Redis for object caching:
+The **PhpRedis** C extension is baked into this image (see the `pecl install redis`
+layer in the `Dockerfile`). It is significantly faster than the pure-PHP Predis
+client because every `wp_cache_*` and transient call is a Redis round-trip, and
+PhpRedis does the protocol/serialization work in C. To use Redis for object caching:
 
-1. Add a custom image layer that installs the extension:
-   ```dockerfile
-   FROM this-image
-   RUN pecl install redis && docker-php-ext-enable redis
+1. Install and activate the [Redis Cache](https://wordpress.org/plugins/redis-cache/) plugin.
+2. Set constants via `WORDPRESS_CONFIG_EXTRA`:
    ```
-2. Install and activate the [Redis Cache](https://wordpress.org/plugins/redis-cache/) plugin.
-3. Set constants via `WORDPRESS_CONFIG_EXTRA`:
-   ```
-   WORDPRESS_CONFIG_EXTRA=define('WP_REDIS_HOST', getenv('REDIS_HOST'));
+   WORDPRESS_CONFIG_EXTRA=define('WP_REDIS_CLIENT', 'phpredis');
+   define('WP_REDIS_HOST', getenv('REDIS_HOST'));
    define('WP_REDIS_PORT', 6379);
    define('WP_REDIS_PREFIX', 'mysite_');
+   define('WP_REDIS_TIMEOUT', 1);
+   define('WP_REDIS_READ_TIMEOUT', 1);
    ```
+
+> **Client selection:** the Redis Cache drop-in auto-selects PhpRedis when the
+> extension is present, so `WP_REDIS_CLIENT` is optional — but setting it explicitly
+> documents intent and prevents a silent fall back to Predis if the extension ever
+> fails to load.
+
+> **Fail fast:** keep `WP_REDIS_TIMEOUT`/`WP_REDIS_READ_TIMEOUT` low (1s). Because
+> Redis sits on the critical path of every request, a slow/unreachable Redis should
+> error quickly rather than hang PHP-FPM workers. (These are already the drop-in
+> defaults; setting them is belt-and-suspenders.)
+
+> **Note:** the free Redis Cache drop-in opens a fresh (non-persistent) connection
+> per request for single-node setups — `WP_REDIS_PERSISTENT`/`pconnect` only applies
+> to its cluster path. The per-request `connect()` to a local Redis is one cheap
+> round-trip; persistent connections are an Object Cache Pro feature.
 
 > **Multi-tenancy:** Always set `WP_REDIS_PREFIX` to a unique value per site when multiple sites share a Redis instance. Without it, two WordPress sites will corrupt each other's object cache.
 
