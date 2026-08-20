@@ -2,7 +2,7 @@
 
 This repository is the base Docker image for Git-based Code Capsules WordPress deployments.
 
-The Dockerfile starts from `wordpress:6.9-php8.4-fpm`. Nginx acts as a reverse proxy in front of PHP-FPM, both running in the same container.
+The Dockerfile starts from `wordpress:7.0.4-php8.4-fpm`. Nginx acts as a reverse proxy in front of PHP-FPM, both running in the same container.
 
 ---
 
