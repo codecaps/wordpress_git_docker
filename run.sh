@@ -47,19 +47,33 @@ FPM_PID=$!
 # on their next image update). Tune the interval with
 # WP_CRON_TRIGGER_INTERVAL_SECONDS.
 wp_cron_trigger_enabled="${WP_CRON_TRIGGER_ENABLED:-false}"
+
+# Resolved and logged unconditionally (same shape as the "Generated
+# overrides:" summary in configure_nginx_overrides.sh) so it's visible on
+# every boot whether the loop ends up running or not — without this, "the env
+# var wasn't set the way I think it was" and "it's set correctly but not
+# doing anything yet" are indistinguishable from the logs alone.
+#
+# Validation matches validated_positive_int() in configure_nginx_overrides.sh
+# (min 1, fallback on anything non-numeric) — kept inline since this script
+# isn't sourced alongside that one. Without it, a bad value makes `sleep`
+# fail: under `set -e` that would silently kill the loop for good (0 would
+# instead spin it tight enough to exhaust FPM workers), which is exactly the
+# kind of silent cron failure this loop exists to fix in the first place.
+wp_cron_trigger_interval="${WP_CRON_TRIGGER_INTERVAL_SECONDS:-300}"
+if ! [[ "$wp_cron_trigger_interval" =~ ^[0-9]+$ ]] || [ "$wp_cron_trigger_interval" -lt 1 ]; then
+    echo "[wp-cron-trigger] Invalid WP_CRON_TRIGGER_INTERVAL_SECONDS value '${wp_cron_trigger_interval}'. Falling back to 300." >&2
+    wp_cron_trigger_interval=300
+fi
+echo "[run]   wp_cron_trigger_enabled=${wp_cron_trigger_enabled}, wp_cron_trigger_interval_seconds=${wp_cron_trigger_interval}"
+
 if [[ "${wp_cron_trigger_enabled,,}" =~ ^(true|1|yes|on)$ ]]; then
-    # Same validation shape as validated_positive_int() in
-    # configure_nginx_overrides.sh (min 1, fallback on anything non-numeric) —
-    # kept inline since this script isn't sourced alongside that one. Without
-    # this, a bad value makes `sleep` fail: under `set -e` that would silently
-    # kill the loop for good (0 would instead spin it tight enough to exhaust
-    # FPM workers), which is exactly the kind of silent cron failure this loop
-    # exists to fix in the first place.
-    wp_cron_trigger_interval="${WP_CRON_TRIGGER_INTERVAL_SECONDS:-300}"
-    if ! [[ "$wp_cron_trigger_interval" =~ ^[0-9]+$ ]] || [ "$wp_cron_trigger_interval" -lt 1 ]; then
-        echo "[wp-cron-trigger] Invalid WP_CRON_TRIGGER_INTERVAL_SECONDS value '${wp_cron_trigger_interval}'. Falling back to 300." >&2
-        wp_cron_trigger_interval=300
-    fi
+    # Unthrottled, one-time: the only positive confirmation on boot that this
+    # feature is actually on, independent of whether the first HTTP trigger
+    # succeeds — without it, "enabled but no logs yet" and "not enabled at
+    # all" look identical until the (throttled) heartbeat below eventually
+    # fires.
+    echo "[wp-cron-trigger] internal trigger loop starting (interval=${wp_cron_trigger_interval}s)"
     (
         # Deliberately not strict here: this loop must survive for the life of
         # the container on nothing but a validated interval, a curl call whose
