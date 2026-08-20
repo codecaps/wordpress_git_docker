@@ -41,10 +41,13 @@ FPM_PID=$!
 # nginx (DISABLE_PUBLIC_WP_CRON), so WordPress's own page-load-triggered
 # pseudo-cron (which self-requests the public site URL) can never reach it —
 # this loop calls it from inside the container instead, on the loopback
-# interface nginx already trusts. Toggle with WP_CRON_LOOP_ENABLED, tune the
-# interval with WP_CRON_LOOP_INTERVAL (seconds).
-wp_cron_loop_enabled="${WP_CRON_LOOP_ENABLED:-true}"
-if [[ "${wp_cron_loop_enabled,,}" =~ ^(true|1|yes|on)$ ]]; then
+# interface nginx already trusts. Opt-in via WP_CRON_TRIGGER_ENABLED (off by
+# default — this is a shared base image, and existing capsules relying on
+# their own external cron trigger shouldn't get a second one silently added
+# on their next image update). Tune the interval with
+# WP_CRON_TRIGGER_INTERVAL_SECONDS.
+wp_cron_trigger_enabled="${WP_CRON_TRIGGER_ENABLED:-false}"
+if [[ "${wp_cron_trigger_enabled,,}" =~ ^(true|1|yes|on)$ ]]; then
     (
         # Signal delivery to a backgrounded shell doesn't reliably reach a
         # grandchild `sleep` — trap TERM here and kill it explicitly so
@@ -53,8 +56,8 @@ if [[ "${wp_cron_loop_enabled,,}" =~ ^(true|1|yes|on)$ ]]; then
         while true; do
             curl -fsS --max-time 30 -H "Host: 127.0.0.1" \
                 "http://127.0.0.1/wp-cron.php?doing_wp_cron" \
-                >/dev/null || echo "[wp-cron-loop] trigger failed" >&2
-            sleep "${WP_CRON_LOOP_INTERVAL:-300}" &
+                >/dev/null || echo "[wp-cron-trigger] trigger failed" >&2
+            sleep "${WP_CRON_TRIGGER_INTERVAL_SECONDS:-300}" &
             SLEEP_PID=$!
             wait "$SLEEP_PID"
         done
