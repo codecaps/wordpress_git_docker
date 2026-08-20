@@ -359,6 +359,8 @@ location = /wp-cron.php {
     fastcgi_param HTTP_X_FORWARDED_FOR $http_x_forwarded_for;
     fastcgi_param HTTP_X_FORWARDED_PROTO $http_x_forwarded_proto;
     fastcgi_pass php_fpm;
+    fastcgi_read_timeout 120s;
+    fastcgi_send_timeout 120s;
     fastcgi_no_cache 1;
     fastcgi_cache_bypass 1;
 }
@@ -377,6 +379,8 @@ location = /wp-cron.php {
     fastcgi_param HTTP_X_FORWARDED_FOR $http_x_forwarded_for;
     fastcgi_param HTTP_X_FORWARDED_PROTO $http_x_forwarded_proto;
     fastcgi_pass php_fpm;
+    fastcgi_read_timeout 120s;
+    fastcgi_send_timeout 120s;
     fastcgi_no_cache 1;
     fastcgi_cache_bypass 1;
 }

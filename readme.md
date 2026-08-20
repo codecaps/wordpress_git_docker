@@ -2,7 +2,7 @@
 
 This repository is the base Docker image for Git-based Code Capsules WordPress deployments.
 
-The Dockerfile starts from `wordpress:6.9-php8.4-fpm`. Nginx acts as a reverse proxy in front of PHP-FPM, both running in the same container.
+The Dockerfile starts from `wordpress:7.0.4-php8.4-fpm`. Nginx acts as a reverse proxy in front of PHP-FPM, both running in the same container.
 
 ---
 
@@ -53,7 +53,12 @@ define('WP_MEMORY_LIMIT', '256M');
 define('WP_MAX_MEMORY_LIMIT', '512M');
 ```
 
-> **Recommended:** Set `define('DISABLE_WP_CRON', true);` and use a Kubernetes CronJob to trigger cron every 5 minutes instead of relying on HTTP traffic.
+> **Recommended:** Set `define('DISABLE_WP_CRON', true);` so WordPress doesn't waste a
+> request self-triggering cron via its public URL (which `DISABLE_PUBLIC_WP_CRON` blocks
+> anyway). If this capsule needs scheduled posts / cron-driven plugin tasks to actually
+> run, also set `WP_CRON_TRIGGER_ENABLED=true` below — `run.sh` will then drive cron
+> internally, no platform-level CronJob or public wp-cron.php required. It's opt-in
+> (off by default) since this is a shared base image.
 
 #### `WORDPRESS_CUSTOM_INI`
 
@@ -209,7 +214,9 @@ is logged.
 | Variable | Default | Description |
 |---|---|---|
 | `XMLRPC_ENABLED` | `false` | Set to `true` to enable XML-RPC (Jetpack, WP mobile app, external publishing) |
-| `DISABLE_PUBLIC_WP_CRON` | `true` | Restrict `wp-cron.php` to `127.0.0.1`. Use a K8s CronJob to call it internally. |
+| `DISABLE_PUBLIC_WP_CRON` | `true` | Restrict `wp-cron.php` to `127.0.0.1`. Triggered internally instead — see `WP_CRON_TRIGGER_ENABLED`. |
+| `WP_CRON_TRIGGER_ENABLED` | `false` | Opt-in: `run.sh` runs a loop that calls `wp-cron.php` over `127.0.0.1` on an interval, since `DISABLE_PUBLIC_WP_CRON` blocks WordPress's own public-URL self-trigger. Set to `true` on any capsule that needs scheduled posts / cron-driven plugin tasks to actually run. |
+| `WP_CRON_TRIGGER_INTERVAL_SECONDS` | `300` | Seconds between internal `wp-cron.php` triggers. |
 | `SESSION_COOKIE_SECURE` | `1` | PHP `session.cookie_secure`. Set to `0` for local HTTP development. |
 | `CSP_HEADER` | permissive default | Full `Content-Security-Policy` header value. Set to empty string to disable. |
 | `DEBUG_HEADERS` | `false` | Set to `true` to expose `X-Cache` response header (reveals cache HIT/MISS/BYPASS). |
