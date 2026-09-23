@@ -1,4 +1,4 @@
-FROM wordpress:7.0.4-php8.4-fpm
+FROM wordpress:7.1.2-php8.5-fpm
 
 ARG NGINX_EXPORTER_VERSION=1.4.0
 ARG FPM_EXPORTER_VERSION=2.2.0
