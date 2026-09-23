@@ -93,6 +93,15 @@ if [[ "${wp_cron_trigger_enabled,,}" =~ ^(true|1|yes|on)$ ]]; then
         # has to be watching at the right moment.
         wp_cron_trigger_heartbeat_file="/var/run/wp-cron-trigger-last-success"
         last_heartbeat_log=0
+        # This loop starts as soon as it's forked, in parallel with nginx and
+        # php-fpm still booting — observed in practice: php-fpm doesn't report
+        # "ready to handle connections" until ~400ms after this point, so an
+        # immediate first attempt reliably hits connection-refused. A fixed
+        # warm-up avoids a guaranteed spurious "trigger failed" on every cold
+        # start (which would false-positive any alerting on that log line at
+        # the default 300s interval) — no readiness signal to poll here, and
+        # 5s leaves ample margin over the ~400ms observed startup gap.
+        sleep 5
         while true; do
             # wp-cron.php calls fastcgi_finish_request() and closes the HTTP
             # connection before doing any real work (before wp-load.php is
