@@ -23,7 +23,7 @@ cgi.fix_pathinfo = 0
 
 ; Resource limits
 memory_limit = 256M
-max_execution_time = 60
+max_execution_time = 20
 max_input_time = 60
 max_input_vars = 3000
 
@@ -56,13 +56,8 @@ opcache.interned_strings_buffer = 16
 opcache.max_accelerated_files = 20000
 opcache.max_wasted_percentage = 10
 
-; Safer default when plugins/themes may update files at runtime.
-opcache.validate_timestamps = 1
+opcache.validate_timestamps = 0
 opcache.revalidate_freq = 60
-
-; For immutable container images where plugins/themes never update at runtime,
-; you can use this for better performance:
-; opcache.validate_timestamps = 0
 
 ; JIT usually does not help typical WordPress workloads.
 opcache.jit_buffer_size = 0

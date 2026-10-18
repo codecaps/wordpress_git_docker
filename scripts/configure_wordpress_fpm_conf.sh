@@ -16,24 +16,14 @@ process_control_timeout = 10s
 listen = 9000
 listen.backlog = 2048
 
-; Good general-purpose default for a small/medium WordPress container.
-; Tune this based on memory:
-;   pm.max_children ≈ available_memory_for_php / average_php_worker_memory
-;
-; Example:
-;   768MB available / 64MB per worker ≈ 12 workers
-pm = dynamic
-pm.max_children = 24
-pm.start_servers = 6
-pm.min_spare_servers = 6
-pm.max_spare_servers = 12
-pm.max_requests = 1000
+pm = static
+pm.max_children = 3
+pm.max_requests = 500
 
-; Kill very slow PHP requests instead of letting workers hang forever.
-request_terminate_timeout = 120s
+request_terminate_timeout = 20s
 
 ; Slow request logging.
-request_slowlog_timeout = 5s
+request_slowlog_timeout = 2s
 slowlog = /proc/self/fd/2
 
 ; Docker-friendly logging.
