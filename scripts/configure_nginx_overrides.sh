@@ -282,10 +282,13 @@ cat > "$NGINX_MAIN_FILE" <<EOF
 worker_processes ${CC_SIZING_NGINX_WORKERS};
 EOF
 
-# PHP handler location{} context: concurrent PHP request cap sized to the
-# FPM pool (see scripts/lib/resource_sizing.sh and php_inflight in nginx.conf).
+# PHP-bound location{} contexts: capsule-wide cap on concurrent PHP requests,
+# sized to the FPM pool (see scripts/lib/resource_sizing.sh and php_inflight
+# in nginx.conf). The per-IP limit is restated because a location with its own
+# limit_conn directives stops inheriting the server-level one.
 cat > "$NGINX_PHP_INFLIGHT_FILE" <<EOF
 # Auto-generated at container startup. Do not edit manually.
+limit_conn per_ip_conn ${max_conn_per_ip};
 limit_conn php_inflight ${CC_SIZING_PHP_MAX_INFLIGHT};
 EOF
 
