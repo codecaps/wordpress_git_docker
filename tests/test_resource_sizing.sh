@@ -7,7 +7,7 @@ source "$HERE/../scripts/lib/resource_sizing.sh"
 
 # Loads a sizing into an associative array `S`.
 size() {
-    local line; declare -gA S=()
+    declare -gA S=()
     while IFS='=' read -r k v; do S["$k"]="$v"; done < <(resource_sizing_compute "$@")
 }
 
