@@ -36,23 +36,49 @@ status every 4 s.
 
 ## Measurements
 
-Per-worker private memory on this heavy site, across all runs: **28–43 MB average,
+Per-worker private memory on this heavy site, across all runs: **28–48 MB average,
 60 MB peak**. The 256M `memory_limit` was never approached by a front-end request; 128M
 produced no "Allowed memory size" errors in any run.
 
-| Run | Image | Plan | Peak pod memory | FPM workers | Outcome |
-|---|---|---|---|---|---|
-| baseline | old defaults | Premium 1 GB / 25% | **843 MB (88%)** | 24 | no OOM in 10 min, memory still climbing; 99% of requests timed out |
-| baseline hammer | old defaults | Premium 1 GB / 25% | 778 MB (82%) | 24 | same |
-| sized v2 | sizing only | Standard 0.6 GB / 15% | 172 MB (30%) | 2 | no OOM; 2,468 × HTTP 500 from nginx `accept4() … Too many open files` |
-| sized v3 | + fd limit, + cap in PHP handler only | Standard 0.6 GB / 15% | 175 MB (31%) | 2 | no OOM, no 500s; cap never fired (see below) |
+Every run below is the same ~6–10 minute replay ramping to 80 req/s (40 on Basic).
+"Served" is the number of HTML pages that completed with 200; everything else was a
+30 s client timeout (old image) or an immediate 429 (new image).
+
+### Test cluster (cc-proxmox, final image)
+
+| Image | Plan | Peak memory | Workers | Served | Served p50 / max | FPM 30 s after burst |
+|---|---|---|---|---|---|---|
+| old defaults | Premium 1 GB / 25% | **843 MB (88%)**, still climbing | 24 | ~1% of 6,712 requests | 10 s / 30 s+ | unresponsive |
+| final | Standard 0.6 GB / 15% | 213 MB (37%) | 2 | 121 | 12 s / 28 s | idle, queue 0 |
+| final | Premium 1 GB / 25% | 190 MB (20%) | 3 | 274 | 9 s / 14.5 s | idle, queue 0 |
+| final | Basic 0.28 GB / 7% | 157 MB (59%) | 2 | 64 | 25 s / 37 s | idle, queue 0 |
+| final | Custom 4 GB / 1 vCPU | 436 MB (11%) | 12 | 837 | 9 s / 17.6 s | idle, queue 0 |
+| final + `CACHE_TTL_SECONDS=60` | Premium | 292 MB (31%) | 3 | 275 (35 cache hits) | 8.5 s / 13.9 s | idle |
+
+### Local Docker lab (same site, same DB, Apple Silicon, `--memory`/`--cpus` per plan)
+
+| Image | Plan | Peak memory | Workers | Served | Served p50 / max | Outcome |
+|---|---|---|---|---|---|---|
+| old defaults | Standard 0.6 GB / 15% | **560 MB (98%)** | 24 | 6 | 85 s / 113 s | **OOM-killed 5×** (`oom_killed=true`), FPM dead after |
+| final | Standard 0.6 GB / 15% | 231 MB (40%) | 2 | 74 | 33 s / 109 s (16-deep queue) | no OOM, recovered |
+| final (4/worker queue) | Premium 1 GB / 25% | 234 MB (25%) | 3 | 163 | 11 s / 43 s | no OOM, recovered |
+| final | Basic 0.28 GB / 7% | 214 MB (80%) | 2 | 0 (no page finishes in 30 s at 0.07 vCPU) | – | no OOM |
+| final | Custom 2 GB / 1 vCPU | 461 MB (24%) | 11 | 1,252 | 5.4 s / 14.6 s | no OOM, recovered |
+
+The page-cache run is the surprise: it changed nothing, because the replayed production
+burst was 1,766 distinct URLs in 2,000 requests (88% unique, across 20 locales and
+product-search filter permutations). That is crawler/scraper traffic; a 60 s page cache
+cannot absorb it, and neither could any worker count. For this site the effective
+mitigations are the in-flight cap (the capsule stays up and recovers) and keeping
+crawlers out (robots, `X-Robots-Tag`, user-agent blocking), both of which were applied.
 
 Findings along the way, each fixed in its own commit:
 
 1. **Memory.** The old pool used 82–88% of a 1 GB capsule under load for no benefit:
    the capsule is CPU-bound at 0.25 vCPU, so 14 of the 24 workers were merely waiting
    for CPU while holding ~35 MB each. One heavier burst (admin work raises
-   `memory_limit` to 256M) tips this over the limit, which is what production saw.
+   `memory_limit` to 256M) tips this over the limit, which is what production saw; on
+   the 0.6 GB plan the same defaults were OOM-killed within minutes in the lab.
 2. **File descriptors.** With `worker_processes` sized to 1, the container's 1024 soft
    fd limit capped nginx at ~500 in-flight proxied requests; past that `accept()` failed
    and nginx returned 500 without touching PHP. `auto` had hidden this by running four
@@ -111,5 +137,7 @@ comes from caching or a bigger plan.
   runtime, was fed back into the sizing (`worker_budget=96M`), survived a rebuild, and
   clearing it restored the defaults.
 
-Pending at the time of writing: re-running the hammer with the final image (v4) at
-Standard, Premium, Basic and a larger Custom plan.
+Dashboard observation (not in this repo): after clearing the "Custom php.ini Config"
+editor, the stored `WORDPRESS_CUSTOM_INI` is an empty string, and the environment
+variable editor then refuses to save anything ("One or more environment variables are
+invalid") until the ini has a non-empty value again.
