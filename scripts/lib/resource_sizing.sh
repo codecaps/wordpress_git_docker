@@ -32,12 +32,16 @@
 #   children   = min( (mem - reserved - opcache) / worker,
 #                     ceil(cpu * PHP_FPM_WORKERS_PER_CPU) )   clamped 2..64
 #   nginx      = clamp(ceil(cpu), 1, 4) worker processes
-#   inflight   = clamp(children * PHP_INFLIGHT_PER_WORKER, 16, 1024)
+#   inflight   = clamp(children * PHP_INFLIGHT_PER_WORKER, 8, 1024)
 #                concurrent PHP requests nginx accepts before answering 429.
 #                Everything past the FPM pool waits in a queue; without a cap
 #                a burst queues thousands of requests that each hold the
 #                pool for a minute, and the capsule stays unresponsive for
-#                hours after the burst has ended.
+#                hours after the burst has ended. The depth is deliberately
+#                shallow: throughput is bounded by CPU whatever the queue
+#                length, so a deeper queue only makes admitted visitors wait
+#                longer (measured: 16 slots on 2 workers at 0.15 CPU meant
+#                30-110 s per served page; 4 per worker keeps it near 30 s).
 #
 # The CPU bound matters as much as the memory bound: PHP is CPU-bound once
 # OPcache is warm, so workers beyond a few per core only add memory and
@@ -49,8 +53,8 @@ SIZING_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SIZING_LIB_DIR/container_resources.sh"
 
 readonly SIZING_DEFAULT_WORKERS_PER_CPU=12
-readonly SIZING_DEFAULT_INFLIGHT_PER_WORKER=8
-readonly SIZING_MIN_INFLIGHT=16
+readonly SIZING_DEFAULT_INFLIGHT_PER_WORKER=4
+readonly SIZING_MIN_INFLIGHT=8
 readonly SIZING_MAX_INFLIGHT=1024
 readonly SIZING_MIN_CHILDREN=2
 readonly SIZING_MAX_CHILDREN=64
@@ -138,7 +142,7 @@ resource_sizing_spares() {
 # the tiered default. Reads three optional tuning knobs from the environment:
 #   PHP_WORKER_MEMORY_MB     private memory budgeted per FPM worker
 #   PHP_FPM_WORKERS_PER_CPU  FPM worker oversubscription per core (default 12)
-#   PHP_INFLIGHT_PER_WORKER  queued+active PHP requests allowed per worker (default 8)
+#   PHP_INFLIGHT_PER_WORKER  queued+active PHP requests allowed per worker (default 4)
 resource_sizing_compute() {
     local mem_mb="$1" cpu_mc="$2" memory_limit_override_mb="${3:-}"
     local workers_per_cpu worker_mb memory_limit_mb opcache_mb interned_mb reserved_mb

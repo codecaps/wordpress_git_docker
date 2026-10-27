@@ -68,7 +68,7 @@ unset CC_SIZING_LOADED
 echo "nginx worker count follows the CPU quota"
 "$BASH" "$SCRIPTS/configure_nginx_overrides.sh" >/dev/null
 assert_contains "$(cat "$tmp/nginx/generated_main.conf")" "worker_processes 1;" "1 worker for 0.25 CPU"
-assert_contains "$(cat "$tmp/nginx/generated_php_inflight.conf")" "limit_conn php_inflight 24;" "in-flight cap for 3 workers"
+assert_contains "$(cat "$tmp/nginx/generated_php_inflight.conf")" "limit_conn php_inflight 12;" "in-flight cap for 3 workers"
 assert_contains "$(cat "$tmp/nginx/generated_php_inflight.conf")" "limit_conn per_ip_conn 30;" "per-IP limit restated beside the cap"
 # Every location that routes to PHP must carry the include, since limit_conn is
 # evaluated only in the first location a request lands in.

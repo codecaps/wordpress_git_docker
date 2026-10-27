@@ -32,15 +32,15 @@ assert_eq 1   "${S[CC_SIZING_FPM_START_SERVERS]}" "start_servers"
 
 echo "in-flight cap follows the pool"
 size 953 250
-assert_eq 24 "${S[CC_SIZING_PHP_MAX_INFLIGHT]}" "3 workers x 8"
+assert_eq 12 "${S[CC_SIZING_PHP_MAX_INFLIGHT]}" "3 workers x 4"
 size 280 70
-assert_eq 16 "${S[CC_SIZING_PHP_MAX_INFLIGHT]}" "floor of 16"
+assert_eq 8 "${S[CC_SIZING_PHP_MAX_INFLIGHT]}" "floor of 8"
 size 16000 8000
-assert_eq 512 "${S[CC_SIZING_PHP_MAX_INFLIGHT]}" "64 workers x 8"
+assert_eq 256 "${S[CC_SIZING_PHP_MAX_INFLIGHT]}" "64 workers x 4"
 PHP_INFLIGHT_PER_WORKER=40 size 16000 8000
 assert_eq 1024 "${S[CC_SIZING_PHP_MAX_INFLIGHT]}" "ceiling of 1024"
-PHP_INFLIGHT_PER_WORKER=4 size 2000 1000
-assert_eq 48 "${S[CC_SIZING_PHP_MAX_INFLIGHT]}" "per-worker knob"
+PHP_INFLIGHT_PER_WORKER=8 size 2000 1000
+assert_eq 96 "${S[CC_SIZING_PHP_MAX_INFLIGHT]}" "per-worker knob"
 
 echo "2G / 1 CPU gets 256M requests and 12 workers"
 size 2000 1000
@@ -147,7 +147,7 @@ unset CC_SIZING_LOADED
 out="$(WORDPRESS_FPM_CONF=$'[www]\npm.max_children = 9' resource_sizing_load; echo "pool=$CC_SIZING_FPM_MAX_CHILDREN/$CC_SIZING_FPM_START_SERVERS/$CC_SIZING_FPM_MIN_SPARE/$CC_SIZING_FPM_MAX_SPARE")"
 assert_contains "$out" "pm.max_children pinned to 9" "pinned children is logged"
 assert_contains "$out" "pool=9/3/2/5" "spares re-derived from the pinned count"
-assert_eq 72 "$(WORDPRESS_FPM_CONF=$'[www]\npm.max_children = 9' bash -c 'unset CC_SIZING_LOADED; source "'"$HERE"'/../scripts/lib/resource_sizing.sh"; resource_sizing_load >/dev/null; echo "$CC_SIZING_PHP_MAX_INFLIGHT"')" "in-flight cap follows the pinned count"
+assert_eq 36 "$(WORDPRESS_FPM_CONF=$'[www]\npm.max_children = 9' bash -c 'unset CC_SIZING_LOADED; source "'"$HERE"'/../scripts/lib/resource_sizing.sh"; resource_sizing_load >/dev/null; echo "$CC_SIZING_PHP_MAX_INFLIGHT"')" "in-flight cap follows the pinned count"
 unset CC_SIZING_LOADED
 out="$(WORDPRESS_FPM_CONF=$'[www]\npm.max_children = many' resource_sizing_load; echo "pool=$CC_SIZING_FPM_MAX_CHILDREN")"
 assert_contains "$out" "not a positive integer" "bad pinned count is reported"

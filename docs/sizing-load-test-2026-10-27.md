@@ -62,7 +62,10 @@ Findings along the way, each fixed in its own commit:
    On a 2-worker capsule a burst left hundreds of doomed requests in the FPM backlog,
    each burning ~60 s of a 0.15-vCPU budget after its client had long gone; PHP-FPM
    was still unresponsive to its own status endpoint eight minutes after the burst
-   ended. Fixed with a capsule-wide `limit_conn` sized to `pm.max_children × 8`.
+   ended. Fixed with a capsule-wide `limit_conn` sized to `pm.max_children × 4`
+   (first tried × 8: on 2 workers at 0.15 vCPU the admitted requests then waited
+   33–109 s for a worker, longer than any visitor stays; throughput is CPU-bound
+   whatever the depth, so the shallower queue only trades waiting for fast 429s).
 4. **Where `limit_conn` is evaluated.** nginx evaluates connection limits once per
    request, in the first location it matches; a pretty URL lands in `location /` and
    only reaches the PHP handler via a `try_files` internal redirect, so a cap declared
@@ -81,11 +84,11 @@ Findings along the way, each fixed in its own commit:
 
 | Plan | Memory | CPU | `memory_limit` | opcache | `pm.max_children` | in-flight cap | nginx workers |
 |---|---|---|---|---|---|---|---|
-| Basic | 0.28 GB | 7% | 128M | 64M | 2 (floor) | 16 | 1 |
-| Standard | 0.6 GB | 15% | 128M | 64M | 2 | 16 | 1 |
-| Premium | 1 GB | 25% | 128M | 112M | 3 | 24 | 1 |
-| Custom | 2 GB | 1 | 256M | 256M | 12 | 96 | 1 |
-| Custom | 4 GB | 2 | 256M | 256M | 24 | 192 | 2 |
+| Basic | 0.28 GB | 7% | 128M | 64M | 2 (floor) | 8 | 1 |
+| Standard | 0.6 GB | 15% | 128M | 64M | 2 | 8 | 1 |
+| Premium | 1 GB | 25% | 128M | 112M | 3 | 12 | 1 |
+| Custom | 2 GB | 1 | 256M | 256M | 12 | 48 | 1 |
+| Custom | 4 GB | 2 | 256M | 256M | 24 | 96 | 2 |
 
 ## What the sizing cannot fix
 
