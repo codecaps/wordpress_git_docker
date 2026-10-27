@@ -41,8 +41,8 @@
 #
 # The CPU bound matters as much as the memory bound: PHP is CPU-bound once
 # OPcache is warm, so workers beyond a few per core only add memory and
-# context switching, not throughput. Requests queue in FPM's listen backlog
-# instead, which costs nothing.
+# context switching, not throughput. Excess requests wait in a short, bounded
+# queue in front of the pool (the in-flight cap above) instead.
 
 SIZING_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./container_resources.sh
