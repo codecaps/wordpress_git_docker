@@ -32,6 +32,12 @@
 #   children   = min( (mem - reserved - opcache) / worker,
 #                     ceil(cpu * PHP_FPM_WORKERS_PER_CPU) )   clamped 2..64
 #   nginx      = clamp(ceil(cpu), 1, 4) worker processes
+#   inflight   = clamp(children * PHP_INFLIGHT_PER_WORKER, 16, 1024)
+#                concurrent PHP requests nginx accepts before answering 429.
+#                Everything past the FPM pool waits in a queue; without a cap
+#                a burst queues thousands of requests that each hold the
+#                pool for a minute, and the capsule stays unresponsive for
+#                hours after the burst has ended.
 #
 # The CPU bound matters as much as the memory bound: PHP is CPU-bound once
 # OPcache is warm, so workers beyond a few per core only add memory and
@@ -43,6 +49,9 @@ SIZING_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SIZING_LIB_DIR/container_resources.sh"
 
 readonly SIZING_DEFAULT_WORKERS_PER_CPU=12
+readonly SIZING_DEFAULT_INFLIGHT_PER_WORKER=8
+readonly SIZING_MIN_INFLIGHT=16
+readonly SIZING_MAX_INFLIGHT=1024
 readonly SIZING_MIN_CHILDREN=2
 readonly SIZING_MAX_CHILDREN=64
 readonly SIZING_MAX_NGINX_WORKERS=4
@@ -106,6 +115,13 @@ resource_sizing_override_value() {
         END { if (value != "") print value }'
 }
 
+# Prints the in-flight PHP request cap for a pool of MAX_CHILDREN workers.
+resource_sizing_inflight() {
+    local max_children="$1" per_worker
+    per_worker="$(_sizing_positive_int_or_default "${PHP_INFLIGHT_PER_WORKER:-}" "$SIZING_DEFAULT_INFLIGHT_PER_WORKER" PHP_INFLIGHT_PER_WORKER)"
+    _sizing_clamp $(( max_children * per_worker )) "$SIZING_MIN_INFLIGHT" "$SIZING_MAX_INFLIGHT"
+}
+
 # Prints "start min_spare max_spare" for a pool of MAX_CHILDREN workers,
 # honouring PHP-FPM's rule min_spare <= start <= max_spare <= max_children.
 resource_sizing_spares() {
@@ -119,13 +135,14 @@ resource_sizing_spares() {
 # Pure function: prints the sizing for a container with MEM_MB of memory and
 # CPU_MC millicores of CPU, one KEY=VALUE per line, keys prefixed CC_SIZING_.
 # An optional third argument pins the per-request memory_limit (MiB) instead of
-# the tiered default. Reads two optional tuning knobs from the environment:
+# the tiered default. Reads three optional tuning knobs from the environment:
 #   PHP_WORKER_MEMORY_MB     private memory budgeted per FPM worker
 #   PHP_FPM_WORKERS_PER_CPU  FPM worker oversubscription per core (default 12)
+#   PHP_INFLIGHT_PER_WORKER  queued+active PHP requests allowed per worker (default 8)
 resource_sizing_compute() {
     local mem_mb="$1" cpu_mc="$2" memory_limit_override_mb="${3:-}"
     local workers_per_cpu worker_mb memory_limit_mb opcache_mb interned_mb reserved_mb
-    local available_mb mem_based cpu_based max_children min_spare max_spare start_servers nginx_workers
+    local available_mb mem_based cpu_based max_children min_spare max_spare start_servers nginx_workers max_inflight
 
     workers_per_cpu="$(_sizing_positive_int_or_default "${PHP_FPM_WORKERS_PER_CPU:-}" "$SIZING_DEFAULT_WORKERS_PER_CPU" PHP_FPM_WORKERS_PER_CPU)"
 
@@ -154,6 +171,7 @@ resource_sizing_compute() {
     read -r start_servers min_spare max_spare < <(resource_sizing_spares "$max_children")
 
     nginx_workers=$(_sizing_clamp $(( (cpu_mc + 999) / 1000 )) 1 "$SIZING_MAX_NGINX_WORKERS")
+    max_inflight="$(resource_sizing_inflight "$max_children")"
 
     cat <<OUT
 CC_SIZING_MEM_MB=${mem_mb}
@@ -170,6 +188,7 @@ CC_SIZING_FPM_START_SERVERS=${start_servers}
 CC_SIZING_FPM_MIN_SPARE=${min_spare}
 CC_SIZING_FPM_MAX_SPARE=${max_spare}
 CC_SIZING_NGINX_WORKERS=${nginx_workers}
+CC_SIZING_PHP_MAX_INFLIGHT=${max_inflight}
 OUT
 }
 
@@ -226,6 +245,8 @@ resource_sizing_load() {
                 < <(resource_sizing_spares "$pinned_children")
             export CC_SIZING_FPM_MAX_CHILDREN="$pinned_children"
             export CC_SIZING_FPM_START_SERVERS CC_SIZING_FPM_MIN_SPARE CC_SIZING_FPM_MAX_SPARE
+            CC_SIZING_PHP_MAX_INFLIGHT="$(resource_sizing_inflight "$pinned_children")"
+            export CC_SIZING_PHP_MAX_INFLIGHT
             _sizing_log "pm.max_children pinned to ${pinned_children} by WORDPRESS_FPM_CONF; spare pool re-derived from it."
         else
             _sizing_log "pm.max_children '${pinned_children}' in WORDPRESS_FPM_CONF is not a positive integer; leaving the sized pool."
@@ -241,5 +262,5 @@ resource_sizing_log() {
     _sizing_log "Container limits (${CC_SIZING_SOURCE}): memory=${CC_SIZING_MEM_MB}M cpu=${CC_SIZING_CPU_MC}m"
     _sizing_log "  php: memory_limit=${CC_SIZING_PHP_MEMORY_LIMIT_MB}M opcache=${CC_SIZING_OPCACHE_MB}M interned_strings=${CC_SIZING_OPCACHE_INTERNED_MB}M"
     _sizing_log "  php-fpm: max_children=${CC_SIZING_FPM_MAX_CHILDREN} (memory-bound=${CC_SIZING_FPM_MEM_BASED}, cpu-bound=${CC_SIZING_FPM_CPU_BASED}, worker_budget=${CC_SIZING_WORKER_MB}M, reserved=${CC_SIZING_RESERVED_MB}M) start=${CC_SIZING_FPM_START_SERVERS} spare=${CC_SIZING_FPM_MIN_SPARE}-${CC_SIZING_FPM_MAX_SPARE}"
-    _sizing_log "  nginx: worker_processes=${CC_SIZING_NGINX_WORKERS}"
+    _sizing_log "  nginx: worker_processes=${CC_SIZING_NGINX_WORKERS} max_inflight_php_requests=${CC_SIZING_PHP_MAX_INFLIGHT}"
 }

@@ -19,6 +19,7 @@ NGINX_DEBUG_HEADERS_FILE="$NGINX_GENERATED_DIR/generated_debug_headers.conf"
 NGINX_WP_CRON_FILE="$NGINX_GENERATED_DIR/generated_wp_cron.conf"
 NGINX_EXTRA_FILE="$NGINX_GENERATED_DIR/generated_extra.conf"
 NGINX_CACHE_KEY_FILE="$NGINX_GENERATED_DIR/generated_cache_key.conf"
+NGINX_PHP_INFLIGHT_FILE="$NGINX_GENERATED_DIR/generated_php_inflight.conf"
 
 CACHE_IGNORE_STRIP_LAYERS=16
 
@@ -281,6 +282,13 @@ cat > "$NGINX_MAIN_FILE" <<EOF
 worker_processes ${CC_SIZING_NGINX_WORKERS};
 EOF
 
+# PHP handler location{} context: concurrent PHP request cap sized to the
+# FPM pool (see scripts/lib/resource_sizing.sh and php_inflight in nginx.conf).
+cat > "$NGINX_PHP_INFLIGHT_FILE" <<EOF
+# Auto-generated at container startup. Do not edit manually.
+limit_conn php_inflight ${CC_SIZING_PHP_MAX_INFLIGHT};
+EOF
+
 # http{} context: rate limit zones + upload size.
 cat > "$NGINX_HTTP_OVERRIDES_FILE" <<EOF
 # Auto-generated at container startup. Do not edit manually.
@@ -442,4 +450,4 @@ log "  max_upload_size=${max_upload_size}, max_conn_per_ip=${max_conn_per_ip}"
 log "  normal_routes_rpm=${normal_routes_rpm}, protected_routes_rpm=${protected_routes_rpm}, api_routes_rpm=${api_routes_rpm}"
 log "  debug_headers=${debug_headers_raw}, csp_header=$([ -n "$csp_header" ] && echo "set" || echo "empty")"
 log "  nginx_extra_conf=$([ -n "$nginx_extra_conf" ] && echo "set" || echo "empty")"
-log "  worker_processes=${CC_SIZING_NGINX_WORKERS}"
+log "  worker_processes=${CC_SIZING_NGINX_WORKERS}, max_inflight_php_requests=${CC_SIZING_PHP_MAX_INFLIGHT}"

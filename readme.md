@@ -131,17 +131,18 @@ The model (`scripts/lib/resource_sizing.sh`), all in MiB:
 | `pm.max_children` | min( (memory − reserved − opcache) ÷ worker budget, ceil(CPU × `PHP_FPM_WORKERS_PER_CPU`) ), clamped 2–64 | The memory bound keeps the pool inside the container; the CPU bound stops forking workers the quota cannot run (they only add memory and contention — requests wait in the listen backlog instead). |
 | `pm.start_servers` / spare | ⅓ / ¼ – ½ of `max_children` | |
 | nginx `worker_processes` | ceil(CPU), clamped 1–4 | `auto` starts one worker per *host* core. |
+| in-flight PHP requests | `pm.max_children` × 8 (`PHP_INFLIGHT_PER_WORKER`), clamped 16–1024 | Concurrent PHP requests nginx accepts (all clients together) before answering `429`. Past the FPM pool every request waits in a queue; without a cap a burst queues thousands of requests that each hold a worker for a minute, and the capsule stays unresponsive for hours after the burst. |
 
 What that produces for the standard plans:
 
-| Plan | Memory | CPU | `memory_limit` | opcache | `pm.max_children` | nginx workers |
-|---|---|---|---|---|---|---|
-| Basic | 0.28 GB | 7% | 128M | 64M | 2 (floor) | 1 |
-| Standard | 0.6 GB | 15% | 128M | 80M | 2 | 1 |
-| Premium | 1 GB | 25% | 128M | 112M | 3 | 1 |
-| Custom | 2 GB | 1 | 256M | 256M | 12 | 1 |
-| Custom | 4 GB | 2 | 256M | 256M | 24 | 2 |
-| Custom | 8 GB | 4 | 256M | 256M | 48 | 4 |
+| Plan | Memory | CPU | `memory_limit` | opcache | `pm.max_children` | in-flight cap | nginx workers |
+|---|---|---|---|---|---|---|---|
+| Basic | 0.28 GB | 7% | 128M | 64M | 2 (floor) | 16 | 1 |
+| Standard | 0.6 GB | 15% | 128M | 64M | 2 | 16 | 1 |
+| Premium | 1 GB | 25% | 128M | 112M | 3 | 24 | 1 |
+| Custom | 2 GB | 1 | 256M | 256M | 12 | 96 | 1 |
+| Custom | 4 GB | 2 | 256M | 256M | 24 | 192 | 2 |
+| Custom | 8 GB | 4 | 256M | 256M | 48 | 384 | 4 |
 
 > Basic cannot fit even two workers inside its budget; the floor of 2 is applied so the
 > site still serves, at the cost of a thin margin. WordPress with more than a handful of
@@ -154,6 +155,7 @@ Tuning knobs — rarely needed, since any output can also be pinned directly thr
 |---|---|---|
 | `PHP_WORKER_MEMORY_MB` | `memory_limit` ÷ 2 | Private memory budgeted per FPM worker. Raise it for sites whose requests routinely peak high (WooCommerce with many extensions); lower it for lean sites to get more workers. |
 | `PHP_FPM_WORKERS_PER_CPU` | `12` | Worker oversubscription per core. PHP is CPU-bound once OPcache is warm, so more only helps if requests spend most of their time waiting on a slow database or external API. |
+| `PHP_INFLIGHT_PER_WORKER` | `8` | Queued-plus-active PHP requests allowed per worker before nginx answers `429`. Raise it if your pages are fast and you would rather queue than shed. |
 
 Without a cgroup limit (local `docker run` without `--memory`/`--cpus`) the sizing
 falls back to the host's memory and CPU count and says so in the log.
@@ -222,6 +224,10 @@ Non-ignored query parameters still differentiate cache entries. Parameter order 
 | `RATE_LIMIT_PROTECTED_ROUTES_RPM` | `30` | Req/min per IP for wp-admin, wp-login |
 | `RATE_LIMIT_API_ROUTES_RPM` | `60` | Req/min per IP for /wp-json/ |
 | `RATE_LIMIT_MAX_CONN_PER_IP` | `30` | Max concurrent connections per IP |
+
+In addition to these per-IP limits, PHP routes have a capsule-wide cap on concurrent
+requests sized to the PHP-FPM pool (see [Resource-aware sizing](#resource-aware-sizing));
+requests past it also get `429`.
 
 All limits are **per client IP**. The client IP is resolved from `X-Forwarded-For`
 (`real_ip_recursive on`), trusting private intermediary ranges plus Cloudflare's
