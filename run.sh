@@ -3,6 +3,14 @@ set -euo pipefail
 
 RUN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# Size PHP, PHP-FPM and nginx to this capsule's cgroup limits once, export the
+# result for the configure scripts below, and log it so the effective sizing
+# is visible on every boot.
+# shellcheck source=./scripts/lib/resource_sizing.sh
+source "$RUN_DIR/scripts/lib/resource_sizing.sh"
+resource_sizing_load
+resource_sizing_log
+
 "$RUN_DIR/scripts/configure_wordpress_custom_ini.sh"
 "$RUN_DIR/scripts/configure_wordpress_fpm_conf.sh"
 "$RUN_DIR/scripts/configure_nginx_overrides.sh"

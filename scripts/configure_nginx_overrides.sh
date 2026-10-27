@@ -1,15 +1,25 @@
 #!/bin/bash
 set -euo pipefail
 
-NGINX_HTTP_OVERRIDES_FILE="/etc/nginx/conf.d/generated_http_overrides.conf"
-NGINX_SERVER_OVERRIDES_FILE="/etc/nginx/conf.d/generated_server_overrides.conf"
-NGINX_CACHE_OVERRIDES_FILE="/etc/nginx/conf.d/generated_fastcgi_cache.conf"
-NGINX_XMLRPC_OVERRIDES_FILE="/etc/nginx/conf.d/generated_xmlrpc_route.conf"
-NGINX_SECURITY_HEADERS_FILE="/etc/nginx/conf.d/generated_security_headers.conf"
-NGINX_DEBUG_HEADERS_FILE="/etc/nginx/conf.d/generated_debug_headers.conf"
-NGINX_WP_CRON_FILE="/etc/nginx/conf.d/generated_wp_cron.conf"
-NGINX_EXTRA_FILE="/etc/nginx/conf.d/generated_extra.conf"
-NGINX_CACHE_KEY_FILE="/etc/nginx/conf.d/generated_cache_key.conf"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./lib/resource_sizing.sh
+source "$SCRIPT_DIR/lib/resource_sizing.sh"
+
+# Output directory is overridable only so the script can be exercised outside
+# the image (see tests/); the image always uses the default.
+NGINX_GENERATED_DIR="${NGINX_GENERATED_DIR:-/etc/nginx/conf.d}"
+
+NGINX_MAIN_FILE="$NGINX_GENERATED_DIR/generated_main.conf"
+NGINX_HTTP_OVERRIDES_FILE="$NGINX_GENERATED_DIR/generated_http_overrides.conf"
+NGINX_SERVER_OVERRIDES_FILE="$NGINX_GENERATED_DIR/generated_server_overrides.conf"
+NGINX_CACHE_OVERRIDES_FILE="$NGINX_GENERATED_DIR/generated_fastcgi_cache.conf"
+NGINX_XMLRPC_OVERRIDES_FILE="$NGINX_GENERATED_DIR/generated_xmlrpc_route.conf"
+NGINX_SECURITY_HEADERS_FILE="$NGINX_GENERATED_DIR/generated_security_headers.conf"
+NGINX_DEBUG_HEADERS_FILE="$NGINX_GENERATED_DIR/generated_debug_headers.conf"
+NGINX_WP_CRON_FILE="$NGINX_GENERATED_DIR/generated_wp_cron.conf"
+NGINX_EXTRA_FILE="$NGINX_GENERATED_DIR/generated_extra.conf"
+NGINX_CACHE_KEY_FILE="$NGINX_GENERATED_DIR/generated_cache_key.conf"
+NGINX_PHP_INFLIGHT_FILE="$NGINX_GENERATED_DIR/generated_php_inflight.conf"
 
 CACHE_IGNORE_STRIP_LAYERS=16
 
@@ -264,6 +274,24 @@ nginx_upload_size="${max_upload_size,,}"
 
 # --- Write generated files ---
 
+# main context: nginx worker count sized to the capsule's CPU quota (see
+# scripts/lib/resource_sizing.sh). No-op when run.sh has already loaded it.
+resource_sizing_load
+cat > "$NGINX_MAIN_FILE" <<EOF
+# Auto-generated at container startup. Do not edit manually.
+worker_processes ${CC_SIZING_NGINX_WORKERS};
+EOF
+
+# PHP-bound location{} contexts: capsule-wide cap on concurrent PHP requests,
+# sized to the FPM pool (see scripts/lib/resource_sizing.sh and php_inflight
+# in nginx.conf). The per-IP limit is restated because a location with its own
+# limit_conn directives stops inheriting the server-level one.
+cat > "$NGINX_PHP_INFLIGHT_FILE" <<EOF
+# Auto-generated at container startup. Do not edit manually.
+limit_conn per_ip_conn ${max_conn_per_ip};
+limit_conn php_inflight ${CC_SIZING_PHP_MAX_INFLIGHT};
+EOF
+
 # http{} context: rate limit zones + upload size.
 cat > "$NGINX_HTTP_OVERRIDES_FILE" <<EOF
 # Auto-generated at container startup. Do not edit manually.
@@ -425,3 +453,4 @@ log "  max_upload_size=${max_upload_size}, max_conn_per_ip=${max_conn_per_ip}"
 log "  normal_routes_rpm=${normal_routes_rpm}, protected_routes_rpm=${protected_routes_rpm}, api_routes_rpm=${api_routes_rpm}"
 log "  debug_headers=${debug_headers_raw}, csp_header=$([ -n "$csp_header" ] && echo "set" || echo "empty")"
 log "  nginx_extra_conf=$([ -n "$nginx_extra_conf" ] && echo "set" || echo "empty")"
+log "  worker_processes=${CC_SIZING_NGINX_WORKERS}, max_inflight_php_requests=${CC_SIZING_PHP_MAX_INFLIGHT}"
