@@ -10,12 +10,13 @@ The Dockerfile starts from `wordpress:7.1.3-php8.5-fpm`. Nginx acts as a reverse
 
 `run.sh` is executed on container start. It:
 
-1. Writes custom PHP ini values from `$WORDPRESS_CUSTOM_INI` to `$PHP_INI_DIR/conf.d/zz-custom.ini`
-2. Writes custom PHP-FPM pool config from `$WORDPRESS_FPM_CONF` to `/usr/local/etc/php-fpm.d/zz-custom.conf`
-3. Generates nginx config fragments from environment variables (rate limits, cache, security headers, etc.)
-4. Validates nginx configuration with `nginx -t`
-5. Starts nginx, nginx-prometheus-exporter, php-fpm_exporter, and php-fpm as supervised background processes
-6. Shuts everything down cleanly on SIGTERM
+1. Reads the container's cgroup CPU and memory limits and sizes PHP, PHP-FPM and nginx to them (logged as `[sizing]` lines — see [Resource-aware sizing](#resource-aware-sizing))
+2. Writes the sized PHP ini defaults merged with `$WORDPRESS_CUSTOM_INI` to `$PHP_INI_DIR/conf.d/zz-custom.ini`
+3. Writes the sized PHP-FPM pool config merged with `$WORDPRESS_FPM_CONF` to `/usr/local/etc/php-fpm.d/zz-custom.conf`
+4. Generates nginx config fragments from environment variables (worker count, rate limits, cache, security headers, etc.)
+5. Validates nginx configuration with `nginx -t`
+6. Starts nginx, nginx-prometheus-exporter, php-fpm_exporter, and php-fpm as supervised background processes
+7. Shuts everything down cleanly on SIGTERM
 
 Prometheus metrics are exposed on ports **9113** (nginx) and **9253** (PHP-FPM).
 
@@ -62,33 +63,34 @@ define('WP_MAX_MEMORY_LIMIT', '512M');
 
 #### `WORDPRESS_CUSTOM_INI`
 
-Custom PHP ini settings merged with the defaults. Recommended for 2GB RAM / 1 CPU:
+Custom PHP ini settings, merged **over** the sized defaults (a key you set replaces
+the default; keys you don't set keep their sized value; unknown keys are appended).
+Nothing needs to be set for a capsule to be correctly sized — this is for the
+exceptions. Examples:
 
 ```ini
-memory_limit = 128M
-opcache.enable = 1
-opcache.memory_consumption = 128
-opcache.interned_strings_buffer = 16
-opcache.max_accelerated_files = 10000
+; A plugin that needs more than the sized per-request limit:
+memory_limit = 512M
+
+; Theme with very large forms:
+max_input_vars = 5000
+
+; Immutable image where plugins/themes never update at runtime:
 opcache.validate_timestamps = 0
-opcache.revalidate_freq = 0
-opcache.enable_cli = 0
-opcache.save_comments = 1
-opcache.jit = tracing
-opcache.jit_buffer_size = 64M
-realpath_cache_ttl = 600
-output_buffering = 4096
-max_file_uploads = 10
-max_execution_time = 60
-max_input_time = 60
-default_socket_timeout = 30
 ```
 
 > **Note:** `upload_max_filesize` and `post_max_size` default to `MAX_UPLOAD_SIZE`. Override here only if you need them to differ from the nginx limit.
 
+> **Note:** a `memory_limit` set here is fed back into the sizing: the worst case of every
+> worker grows with it, so the worker pool shrinks accordingly (see the `[sizing]` boot log).
+
 #### `WORDPRESS_FPM_CONF`
 
-Custom PHP-FPM pool configuration merged with the defaults. Recommended for 2GB RAM / 1 CPU:
+Custom PHP-FPM pool configuration, merged over the sized defaults the same way (per
+`[section]`). Only needed to pin a pool by hand. A `pm.max_children` set here re-derives
+`pm.start_servers` / `pm.min_spare_servers` / `pm.max_spare_servers` from the pinned value
+(PHP-FPM refuses to start when `max_spare_servers` exceeds `max_children`), unless you set
+those too:
 
 ```ini
 [www]
@@ -98,16 +100,65 @@ pm.max_requests = 500
 request_terminate_timeout = 60s
 ```
 
-**Scaling guide:**
-
-| RAM | CPU | `pm.max_children` |
-|---|---|---|
-| 512MB | 0.5 | 3 |
-| 1GB | 1 | 5 |
-| 2GB | 1 | 8 |
-| 4GB | 2 | 16 |
-
 > **Security note:** `clear_env = no` is set so WordPress can read `WORDPRESS_DB_HOST` etc. via `getenv()`. This also means **all** environment variables in the container are visible to PHP code. Do not inject secrets as env vars that WordPress plugins should not access.
+
+---
+
+### Resource-aware sizing
+
+Kubernetes enforces a capsule's scale with cgroup limits, but nothing inside the
+container reports them: `nproc` and `/proc/meminfo` describe the *node*. The image
+therefore reads its own cgroup (v2 or v1) at startup and derives the PHP, PHP-FPM and
+nginx defaults from the real limits, so one image is safe on a 0.28 GB Basic capsule and
+uses all of a multi-GB one. The sizing is logged on every boot:
+
+```
+[sizing] Container limits (cgroup): memory=953M cpu=250m
+[sizing]   php: memory_limit=128M opcache=112M interned_strings=8M
+[sizing]   php-fpm: max_children=3 (memory-bound=10, cpu-bound=3, worker_budget=64M, reserved=139M) start=1 spare=1-2
+[sizing]   nginx: worker_processes=1
+```
+
+The model (`scripts/lib/resource_sizing.sh`), all in MiB:
+
+| Setting | Rule | Why |
+|---|---|---|
+| `memory_limit` | 128M below 1.5 GB, 256M above | Per-request cap. WordPress front-end requests peak at 40–70 MB even on heavy sites; WordPress raises the limit itself to `WP_MAX_MEMORY_LIMIT` (256M) for admin work. |
+| `opcache.memory_consumption` | memory ÷ 8, clamped 64–256, rounded to 16 | Shared segment, charged once. Core + a typical plugin set compiles to 40–120 MB. |
+| `opcache.interned_strings_buffer` | 8 / 16 / 32 by opcache size | |
+| reserved | 80 + memory ÷ 16 | nginx, the two exporters, the FPM master, and page-cache headroom. |
+| worker budget | `memory_limit` ÷ 2 (`PHP_WORKER_MEMORY_MB`) | Private memory budgeted per FPM worker. Measured 35 MB average / 56 MB peak per worker on a 15-plugin multilingual site. |
+| `pm.max_children` | min( (memory − reserved − opcache) ÷ worker budget, ceil(CPU × `PHP_FPM_WORKERS_PER_CPU`) ), clamped 2–64 | The memory bound keeps the pool inside the container; the CPU bound stops forking workers the quota cannot run (they only add memory and contention — requests wait in the listen backlog instead). |
+| `pm.start_servers` / spare | ⅓ / ¼ – ½ of `max_children` | |
+| nginx `worker_processes` | ceil(CPU), clamped 1–4 | `auto` starts one worker per *host* core. |
+
+What that produces for the standard plans:
+
+| Plan | Memory | CPU | `memory_limit` | opcache | `pm.max_children` | nginx workers |
+|---|---|---|---|---|---|---|
+| Basic | 0.28 GB | 7% | 128M | 64M | 2 (floor) | 1 |
+| Standard | 0.6 GB | 15% | 128M | 80M | 2 | 1 |
+| Premium | 1 GB | 25% | 128M | 112M | 3 | 1 |
+| Custom | 2 GB | 1 | 256M | 256M | 12 | 1 |
+| Custom | 4 GB | 2 | 256M | 256M | 24 | 2 |
+| Custom | 8 GB | 4 | 256M | 256M | 48 | 4 |
+
+> Basic cannot fit even two workers inside its budget; the floor of 2 is applied so the
+> site still serves, at the cost of a thin margin. WordPress with more than a handful of
+> plugins should run on Standard or above.
+
+Tuning knobs — rarely needed, since any output can also be pinned directly through
+`WORDPRESS_CUSTOM_INI` / `WORDPRESS_FPM_CONF`:
+
+| Variable | Default | Description |
+|---|---|---|
+| `PHP_WORKER_MEMORY_MB` | `memory_limit` ÷ 2 | Private memory budgeted per FPM worker. Raise it for sites whose requests routinely peak high (WooCommerce with many extensions); lower it for lean sites to get more workers. |
+| `PHP_FPM_WORKERS_PER_CPU` | `12` | Worker oversubscription per core. PHP is CPU-bound once OPcache is warm, so more only helps if requests spend most of their time waiting on a slow database or external API. |
+
+Without a cgroup limit (local `docker run` without `--memory`/`--cpus`) the sizing
+falls back to the host's memory and CPU count and says so in the log.
+
+Run the sizing tests with `bash tests/run.sh` (bash 4+).
 
 ---
 
@@ -322,20 +373,24 @@ PhpRedis does the protocol/serialization work in C. To use Redis for object cach
 
 | Script | Purpose |
 |---|---|
-| `run.sh` | Orchestrates startup; supervises nginx, exporters, and php-fpm |
-| `scripts/configure_wordpress_custom_ini.sh` | Merges `WORDPRESS_CUSTOM_INI` with defaults |
-| `scripts/configure_wordpress_fpm_conf.sh` | Merges `WORDPRESS_FPM_CONF` with defaults |
-| `scripts/configure_nginx_overrides.sh` | Generates all dynamic nginx config fragments |
+| `run.sh` | Orchestrates startup; loads the sizing, supervises nginx, exporters, and php-fpm |
+| `scripts/configure_wordpress_custom_ini.sh` | Merges `WORDPRESS_CUSTOM_INI` with the sized defaults |
+| `scripts/configure_wordpress_fpm_conf.sh` | Merges `WORDPRESS_FPM_CONF` with the sized defaults |
+| `scripts/configure_nginx_overrides.sh` | Generates all dynamic nginx config fragments (incl. `worker_processes`) |
 | `scripts/lib/merge_and_write_config.sh` | Shared awk-based merge logic |
+| `scripts/lib/container_resources.sh` | Reads the container's cgroup (v1/v2) CPU and memory limits |
+| `scripts/lib/resource_sizing.sh` | Derives the PHP / PHP-FPM / nginx sizing from those limits |
+| `tests/run.sh` | Shell test suite for the detection, the sizing model and the configure scripts |
 
 ---
 
 ## Optimisations Included
 
+- **Resource-aware sizing**: PHP `memory_limit`, OPcache, the PHP-FPM worker pool and nginx workers are derived from the capsule's real cgroup limits, so the container cannot over-commit its memory and be OOM-killed under load
 - **OPcache**: reduces CPU usage on repeated requests
 - **Gzip compression**: reduces response sizes by 60–80%
 - **Static file caching**: 30-day browser cache for assets; 1h for XML/txt
-- **FastCGI page cache**: configurable TTL (default 60s), bypassed for logged-in users, carts, admin
+- **FastCGI page cache**: opt-in via `CACHE_TTL_SECONDS`, bypassed for logged-in users, carts, admin
 - **Security headers**: HSTS, CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, X-Permitted-Cross-Domain-Policies
 - **PHP execution blocked** in uploads, cache, and upgrade directories
 - **Sensitive files blocked**: `wp-config.php`, `debug.log`, `.env`, `.git`, `wp-config-sample.php`, plugin/theme readme files, `wp-includes/*.php`
